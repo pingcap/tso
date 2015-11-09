@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"encoding/binary"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
 	"net"
 	"net/http"
-	"net/rpc"
+	_ "net/http/pprof"
 	"sync/atomic"
 	"time"
 )
@@ -44,11 +46,34 @@ func (tso *TimestampOracle) updateTicker() {
 
 }
 
-func (tso *TimestampOracle) Alloc(req *proto.Request, resp *proto.Response) error {
-	prev := tso.ts.Load().(*atomicObject)
-	resp.Physical = int64(prev.physical.Nanosecond()) / 1024 / 1024
-	resp.Logical = atomic.AddInt64(&prev.logical, 1)
-	return nil
+func (tso *TimestampOracle) handleConnection(s *session) {
+	var buf [1]byte
+	defer s.conn.Close()
+	resp := &proto.Response{}
+	for {
+		_, err := s.r.Read(buf[:])
+		if err != nil {
+			log.Warn(err)
+			return
+		}
+		prev := tso.ts.Load().(*atomicObject)
+		resp.Physical = int64(prev.physical.Nanosecond()) / 1024 / 1024
+		resp.Logical = atomic.AddInt64(&prev.logical, 1)
+		binary.Write(s.w, binary.BigEndian, resp)
+		if s.r.Buffered() <= 0 {
+			err = s.w.Flush()
+			if err != nil {
+				log.Warn(err)
+				return
+			}
+		}
+	}
+}
+
+type session struct {
+	r    *bufio.Reader
+	w    *bufio.Writer
+	conn net.Conn
 }
 
 func main() {
@@ -60,11 +85,25 @@ func main() {
 	}
 	tso.ts.Store(current)
 	go tso.updateTicker()
-	rpc.Register(tso)
-	rpc.HandleHTTP()
-	l, e := net.Listen("tcp", ":1234")
-	if e != nil {
-		log.Fatal("listen error:", e)
+	go http.ListenAndServe(":5555", nil)
+
+	ln, err := net.Listen("tcp", ":1234")
+	if err != nil {
+		log.Fatal(err)
 	}
-	http.Serve(l, nil)
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Warning(err)
+			continue
+			// handle error
+		}
+		s := &session{
+			r:    bufio.NewReaderSize(conn, 8192),
+			w:    bufio.NewWriterSize(conn, 8192),
+			conn: conn,
+		}
+		go tso.handleConnection(s)
+	}
 }
