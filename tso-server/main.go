@@ -3,13 +3,14 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
-	"github.com/ngaut/log"
-	"github.com/ngaut/tso/proto"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"sync/atomic"
 	"time"
+
+	"github.com/ngaut/log"
+	"github.com/ngaut/tso/proto"
 )
 
 const (
@@ -43,7 +44,6 @@ func (tso *TimestampOracle) updateTicker() {
 			tso.ts.Store(current)
 		}
 	}
-
 }
 
 func (tso *TimestampOracle) handleConnection(s *session) {

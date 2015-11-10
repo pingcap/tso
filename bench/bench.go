@@ -1,53 +1,45 @@
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
 	"flag"
-	"github.com/ngaut/log"
-	"github.com/ngaut/tso/proto"
-	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"sync"
 	"time"
+
+	"github.com/ngaut/log"
+	"github.com/ngaut/tso/client"
 )
 
 var serverAddress = flag.String("serveraddr", "localhost:1234", "server address")
 
+const (
+	total     = 1000 * 10000
+	clientCnt = 100
+)
+
 func main() {
+	go http.ListenAndServe(":6666", nil)
 	var wg sync.WaitGroup
 	start := time.Now()
-	for i := 0; i < 20; i++ {
+	for x := 0; x < 100; x++ {
+		c := client.NewClient(&client.Conf{ServerAddr: *serverAddress})
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			conn, err := net.Dial("tcp", *serverAddress)
-			if err != nil {
-				log.Fatal("dialing:", err)
+			cnt := total / clientCnt
+			prs := make([]*client.PipelineRequest, 0, cnt)
+			for i := 0; i < cnt; i++ {
+				pr := c.GetTimestamp()
+				prs = append(prs, pr)
 			}
 
-			r := bufio.NewReaderSize(conn, 8192)
-			w := bufio.NewWriterSize(conn, 8192)
-			cnt := 1000000
-			var req [1]byte
 			for i := 0; i < cnt; i++ {
-				w.Write(req[:])
+				<-prs[i].Done
 			}
-			err = w.Flush()
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			var resp proto.Response
-			for i := 0; i < cnt; i++ {
-				err = binary.Read(r, binary.BigEndian, &resp)
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-			conn.Close()
 		}()
 	}
 	wg.Wait()
 
-	log.Debug(time.Since(start).Seconds())
+	log.Debugf("Total %d, use %v/s", total, time.Since(start).Seconds())
 }
