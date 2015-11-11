@@ -55,44 +55,50 @@ func (c *Client) notifyOne(reply *proto.Response) {
 	req.Done <- nil
 }
 
-func (c *Client) do() error {
-	var (
-		protoHdr [1]byte
-		s        *Conn
-	)
+func (c *Client) writeRequests(session *Conn) error {
+	var protoHdr [1]byte
+	for i := 0; i < c.pending.Len(); i++ {
+		session.Write(protoHdr[:])
+	}
+	return session.Flush()
+}
 
-	s, err := NewConnection(c.conf.ServerAddr, time.Duration(1*time.Second))
+func (c *Client) handleResponse(session *Conn) error {
+	length := c.pending.Len()
+	for i := 0; i < length; i++ {
+		var resp proto.Response
+		err := binary.Read(session, binary.BigEndian, &resp)
+		if err != nil {
+			return err
+		}
+		c.notifyOne(&resp)
+	}
+
+	return nil
+}
+
+func (c *Client) do() error {
+	session, err := NewConnection(c.conf.ServerAddr, time.Duration(1*time.Second))
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer session.Close()
 	for {
 		select {
 		case req := <-c.requests:
 			c.pending.PushBack(req)
-			s.Write(protoHdr[:])
 			length := len(c.requests)
 			for i := 0; i < length; i++ {
 				req = <-c.requests
 				c.pending.PushBack(req)
-				s.Write(protoHdr[:])
 			}
-			err = s.Flush()
+			err = c.writeRequests(session)
 			if err != nil {
-				c.cleanupPending(err)
 				return err
 			}
-
-			length = c.pending.Len()
-			for i := 0; i < length; i++ {
-				var resp proto.Response
-				// TODO: deadline read
-				err = binary.Read(s, binary.BigEndian, &resp)
-				if err != nil {
-					c.cleanupPending(err)
-					return err
-				}
-				c.notifyOne(&resp)
+			err = c.handleResponse(session)
+			if err != nil {
+				return err
 			}
 		}
 	}
