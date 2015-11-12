@@ -21,8 +21,31 @@ type Conf struct {
 }
 
 type PipelineRequest struct {
-	Done  chan error
-	Reply *proto.Response
+	done  chan error
+	reply *proto.Response
+}
+
+func newPipelineRequest() *PipelineRequest {
+	return &PipelineRequest{
+		done: make(chan error, 1),
+	}
+}
+
+func (pr *PipelineRequest) MarkDone(reply *proto.Response, err error) {
+	if err != nil {
+		pr.reply = nil
+	}
+	pr.reply = reply
+	pr.done <- err
+}
+
+func (pr *PipelineRequest) GetTS() (*proto.Timestamp, error) {
+	err := <-pr.done
+	if err != nil {
+		return nil, err
+	}
+
+	return &pr.reply.Timestamp, nil
 }
 
 func NewClient(conf *Conf) *Client {
@@ -43,7 +66,7 @@ func (c *Client) cleanupPending(err error) {
 	for i := 0; i < length; i++ {
 		e := c.pending.Front()
 		c.pending.Remove(e)
-		e.Value.(*PipelineRequest).Done <- err
+		e.Value.(*PipelineRequest).MarkDone(nil, err)
 	}
 }
 
@@ -51,8 +74,7 @@ func (c *Client) notifyOne(reply *proto.Response) {
 	e := c.pending.Front()
 	c.pending.Remove(e)
 	req := e.Value.(*PipelineRequest)
-	req.Reply = reply
-	req.Done <- nil
+	req.MarkDone(reply, nil)
 }
 
 func (c *Client) writeRequests(session *Conn) error {
@@ -115,10 +137,8 @@ func (c *Client) workerLoop() {
 	}
 }
 
-func (c *Client) GetTimestamp() *PipelineRequest {
-	pr := &PipelineRequest{
-		Done: make(chan error, 1),
-	}
+func (c *Client) GoGetTimestamp() *PipelineRequest {
+	pr := newPipelineRequest()
 	c.requests <- pr
 	return pr
 }
