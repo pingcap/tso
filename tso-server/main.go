@@ -34,7 +34,7 @@ func (tso *TimestampOracle) updateTicker() {
 			prev := tso.ts.Load().(*atomicObject)
 			now := time.Now()
 			// ms
-			since := now.Sub(prev.physical).Nanoseconds() / 1024 / 1024
+			since := now.Sub(prev.physical).Nanoseconds() / 1e6
 			if since > 2*step {
 				log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
 			}
@@ -57,7 +57,7 @@ func (tso *TimestampOracle) handleConnection(s *session) {
 			return
 		}
 		prev := tso.ts.Load().(*atomicObject)
-		resp.Physical = int64(prev.physical.Nanosecond()) / 1024 / 1024
+		resp.Physical = int64(prev.physical.UnixNano()) / 1e6
 		resp.Logical = atomic.AddInt64(&prev.logical, 1)
 		binary.Write(s.w, binary.BigEndian, resp)
 		if s.r.Buffered() <= 0 {
