@@ -131,7 +131,7 @@ func (c *Client) workerLoop() {
 	for {
 		err := c.do()
 		if err != nil {
-			log.Warn(err)
+			c.cleanupPending(err)
 		}
 		time.Sleep(time.Second)
 	}
