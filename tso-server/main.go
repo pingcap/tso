@@ -15,8 +15,7 @@ import (
 )
 
 var (
-	addr     = flag.String("addr", ":1234", "server listening address")
-	netProto = flag.String("proto", "tcp", "server network protocol")
+	addr = flag.String("addr", ":1234", "server listening address")
 )
 
 const (
@@ -95,7 +94,7 @@ func main() {
 	go tso.updateTicker()
 	go http.ListenAndServe(":5555", nil)
 
-	ln, err := net.Listen(*netProto, *addr)
+	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)
 	}
