@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"flag"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
+)
+
+var (
+	addr = flag.String("addr", ":1234", "server listening address")
 )
 
 const (
@@ -77,6 +82,8 @@ type session struct {
 }
 
 func main() {
+	flag.Parse()
+
 	tso := &TimestampOracle{
 		ticker: time.NewTicker(10 * time.Millisecond),
 	}
@@ -87,7 +94,7 @@ func main() {
 	go tso.updateTicker()
 	go http.ListenAndServe(":5555", nil)
 
-	ln, err := net.Listen("tcp", ":1234")
+	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)
 	}
