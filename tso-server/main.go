@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	addr               = flag.String("addr", ":1234", "server listening address")
-	maxLogicalInterval = int64(math.Pow(2, 18))
+	addr       = flag.String("addr", ":1234", "server listening address")
+	maxLogical = int64(math.Pow(2, 18))
 )
 
 const (
@@ -67,8 +67,8 @@ func (tso *TimestampOracle) getRespTS() *proto.Response {
 		current := tso.ts.Load().(*atomicObject)
 		resp.Physical = int64(current.physical.UnixNano()) / 1e6
 		resp.Logical = atomic.AddInt64(&current.logical, 1)
-		if resp.Logical >= maxLogicalInterval {
-			log.Errorf("logical part outside of max logical interval, please check ntp time", resp)
+		if resp.Logical >= maxLogical {
+			log.Errorf("logical part outside of max logical interval %v, please check ntp time", resp)
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
