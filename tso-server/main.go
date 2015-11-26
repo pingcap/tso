@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"flag"
+	"math"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -15,7 +16,8 @@ import (
 )
 
 var (
-	addr = flag.String("addr", ":1234", "server listening address")
+	addr               = flag.String("addr", ":1234", "server listening address")
+	maxLogicalInterval = int64(math.Pow(2, 18))
 )
 
 const (
@@ -33,6 +35,7 @@ type TimestampOracle struct {
 }
 
 func (tso *TimestampOracle) updateTicker() {
+	// TODO: save latest TS to persistent storage(zookeeper/etcd...)
 	for {
 		select {
 		case <-tso.ticker.C:
@@ -45,9 +48,11 @@ func (tso *TimestampOracle) updateTicker() {
 				log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
 			}
 			// Avoid the same physical time stamp
-			if since == 0 {
+			if since <= 0 {
+				log.Warn("invalid physical time stamp")
 				continue
 			}
+
 			current := &atomicObject{
 				physical: now,
 			}
@@ -56,21 +61,34 @@ func (tso *TimestampOracle) updateTicker() {
 	}
 }
 
+func (tso *TimestampOracle) getRespTS() *proto.Response {
+	resp := &proto.Response{}
+	for {
+		current := tso.ts.Load().(*atomicObject)
+		resp.Physical = int64(current.physical.UnixNano()) / 1e6
+		resp.Logical = atomic.AddInt64(&current.logical, 1)
+		if resp.Logical >= maxLogicalInterval {
+			log.Errorf("logical part outside of max logical interval, please check ntp time", resp)
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		break
+	}
+	return resp
+}
+
 func (tso *TimestampOracle) handleConnection(s *session) {
 	var buf [1]byte
 	defer s.conn.Close()
 
-	resp := &proto.Response{}
 	for {
 		_, err := s.r.Read(buf[:])
 		if err != nil {
 			log.Warn(err)
 			return
 		}
-		prev := tso.ts.Load().(*atomicObject)
-		resp.Physical = int64(prev.physical.UnixNano()) / 1e6
-		resp.Logical = atomic.AddInt64(&prev.logical, 1)
 
+		resp := tso.getRespTS()
 		binary.Write(s.w, binary.BigEndian, resp)
 		if s.r.Buffered() <= 0 {
 			err = s.w.Flush()
