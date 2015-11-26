@@ -23,9 +23,9 @@ func main() {
 	var wg sync.WaitGroup
 	start := time.Now()
 	for x := 0; x < clientCnt; x++ {
-		c := client.NewClient(&client.Conf{ServerAddr: *serverAddress})
 		wg.Add(1)
 		go func() {
+			c := client.NewClient(&client.Conf{ServerAddr: *serverAddress})
 			defer wg.Done()
 			cnt := total / clientCnt
 			prs := make([]*client.PipelineRequest, cnt)
@@ -35,7 +35,10 @@ func main() {
 			}
 
 			for i := 0; i < cnt; i++ {
-				prs[i].GetTS()
+				_, err := prs[i].GetTS()
+				if err != nil {
+					log.Fatal(err)
+				}
 			}
 		}()
 	}

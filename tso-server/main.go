@@ -38,10 +38,15 @@ func (tso *TimestampOracle) updateTicker() {
 		case <-tso.ticker.C:
 			prev := tso.ts.Load().(*atomicObject)
 			now := time.Now()
+
 			// ms
 			since := now.Sub(prev.physical).Nanoseconds() / 1e6
 			if since > 2*step {
 				log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
+			}
+			// Avoid the same physical time stamp
+			if since == 0 {
+				continue
 			}
 			current := &atomicObject{
 				physical: now,
@@ -54,6 +59,7 @@ func (tso *TimestampOracle) updateTicker() {
 func (tso *TimestampOracle) handleConnection(s *session) {
 	var buf [1]byte
 	defer s.conn.Close()
+
 	resp := &proto.Response{}
 	for {
 		_, err := s.r.Read(buf[:])
@@ -64,6 +70,7 @@ func (tso *TimestampOracle) handleConnection(s *session) {
 		prev := tso.ts.Load().(*atomicObject)
 		resp.Physical = int64(prev.physical.UnixNano()) / 1e6
 		resp.Logical = atomic.AddInt64(&prev.logical, 1)
+
 		binary.Write(s.w, binary.BigEndian, resp)
 		if s.r.Buffered() <= 0 {
 			err = s.w.Flush()

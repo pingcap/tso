@@ -50,7 +50,7 @@ func (pr *PipelineRequest) GetTS() (*proto.Timestamp, error) {
 
 func NewClient(conf *Conf) *Client {
 	c := &Client{
-		requests: make(chan *PipelineRequest, 200000),
+		requests: make(chan *PipelineRequest, 100000),
 		pending:  list.New(),
 		conf:     conf,
 	}
