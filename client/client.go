@@ -2,13 +2,18 @@ package client
 
 import (
 	"container/list"
-	"encoding/binary"
 	"time"
 
+	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
 )
 
+const (
+	maxPipelineRequest = 100000
+)
+
+// Client is a timestamp oracle client.
 type Client struct {
 	requests chan *PipelineRequest
 
@@ -16,10 +21,12 @@ type Client struct {
 	conf    *Conf
 }
 
+// Conf is the configuration.
 type Conf struct {
 	ServerAddr string
 }
 
+// PipelineRequest let you get the timestamp with pipeline.
 type PipelineRequest struct {
 	done  chan error
 	reply *proto.Response
@@ -31,26 +38,29 @@ func newPipelineRequest() *PipelineRequest {
 	}
 }
 
+// MarkDone sets the repsone for current request.
 func (pr *PipelineRequest) MarkDone(reply *proto.Response, err error) {
 	if err != nil {
 		pr.reply = nil
 	}
 	pr.reply = reply
-	pr.done <- err
+	pr.done <- errors.Trace(err)
 }
 
+// GetTS gets the timestamp.
 func (pr *PipelineRequest) GetTS() (*proto.Timestamp, error) {
 	err := <-pr.done
 	if err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	return &pr.reply.Timestamp, nil
 }
 
+// NewClient creates a timestamp oracle client.
 func NewClient(conf *Conf) *Client {
 	c := &Client{
-		requests: make(chan *PipelineRequest, 100000),
+		requests: make(chan *PipelineRequest, maxPipelineRequest),
 		pending:  list.New(),
 		conf:     conf,
 	}
@@ -89,9 +99,9 @@ func (c *Client) handleResponse(session *Conn) error {
 	length := c.pending.Len()
 	for i := 0; i < length; i++ {
 		var resp proto.Response
-		err := binary.Read(session, binary.BigEndian, &resp)
+		err := resp.Decode(session)
 		if err != nil {
-			return err
+			return errors.Trace(err)
 		}
 		c.notifyOne(&resp)
 	}
@@ -102,7 +112,7 @@ func (c *Client) handleResponse(session *Conn) error {
 func (c *Client) do() error {
 	session, err := NewConnection(c.conf.ServerAddr, time.Duration(1*time.Second))
 	if err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	defer session.Close()
 	for {
@@ -116,11 +126,11 @@ func (c *Client) do() error {
 			}
 			err = c.writeRequests(session)
 			if err != nil {
-				return err
+				return errors.Trace(err)
 			}
 			err = c.handleResponse(session)
 			if err != nil {
-				return err
+				return errors.Trace(err)
 			}
 		}
 	}
@@ -137,6 +147,7 @@ func (c *Client) workerLoop() {
 	}
 }
 
+// GoGetTimestamp returns a PipelineRequest so you can get the timestamp later.
 func (c *Client) GoGetTimestamp() *PipelineRequest {
 	pr := newPipelineRequest()
 	c.requests <- pr
