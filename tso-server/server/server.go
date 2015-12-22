@@ -15,7 +15,6 @@ package server
 
 import (
 	"bufio"
-	"encoding/binary"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -115,7 +114,7 @@ func (tso *TimestampOracle) handleConnection(s *session) {
 		}
 
 		resp := tso.getRespTS()
-		binary.Write(s.w, binary.BigEndian, resp)
+		resp.Encode(s.w)
 		if s.r.Buffered() <= 0 {
 			err = s.w.Flush()
 			if err != nil {

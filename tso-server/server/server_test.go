@@ -14,9 +14,9 @@
 package server
 
 import (
-	"encoding/binary"
 	"flag"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,20 +56,33 @@ func (s *testServerSuite) testGetTimestamp(c *C, conn net.Conn, n int) []proto.R
 	_, err := conn.Write(make([]byte, n))
 	c.Assert(err, IsNil)
 
+	last := proto.Response{}
 	for i := 0; i < n; i++ {
-		err = binary.Read(conn, binary.BigEndian, &res[i])
+		err = res[i].Decode(conn)
 		c.Assert(err, IsNil)
+
+		c.Assert(res[i].Physical, GreaterEqual, last.Physical)
+		c.Assert(res[i].Logical, Greater, last.Logical)
+		last = res[i]
 	}
 
 	return res
 }
 
 func (s *testServerSuite) TestServer(c *C) {
-	conn, err := net.Dial("tcp", *testAddr)
-	c.Assert(err, IsNil)
-	defer conn.Close()
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-	res := s.testGetTimestamp(c, conn, 2)
-	c.Assert(res[1].Physical, GreaterEqual, res[0].Physical)
-	c.Assert(res[1].Logical, Greater, res[0].Logical)
+			conn, err := net.Dial("tcp", *testAddr)
+			c.Assert(err, IsNil)
+			defer conn.Close()
+
+			s.testGetTimestamp(c, conn, 10)
+		}()
+	}
+
+	wg.Wait()
 }
