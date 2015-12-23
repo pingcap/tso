@@ -7,18 +7,22 @@ import (
 	"github.com/juju/errors"
 )
 
+// RequestHeader is for tso request proto.
 type RequestHeader struct {
 }
 
+// Timestamp is for tso timestamp.
 type Timestamp struct {
 	Physical int64
 	Logical  int64
 }
 
+// Response is for tso reponse proto.
 type Response struct {
 	Timestamp
 }
 
+// Encode encodes repsonse proto into w.
 func (res *Response) Encode(w io.Writer) error {
 	var buf [16]byte
 	binary.BigEndian.PutUint64(buf[0:8], uint64(res.Physical))
@@ -27,6 +31,7 @@ func (res *Response) Encode(w io.Writer) error {
 	return errors.Trace(err)
 }
 
+// Decode decodes reponse proto from r.
 func (res *Response) Decode(r io.Reader) error {
 	var buf [16]byte
 	_, err := io.ReadFull(r, buf[0:16])

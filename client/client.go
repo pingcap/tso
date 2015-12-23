@@ -134,7 +134,6 @@ func (c *Client) do() error {
 			}
 		}
 	}
-	return nil
 }
 
 func (c *Client) workerLoop() {
