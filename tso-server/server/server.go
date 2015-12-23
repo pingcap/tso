@@ -23,6 +23,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
+	"github.com/ngaut/zkhelper"
 )
 
 const (
@@ -32,6 +33,10 @@ const (
 
 	sessionReadBufferSize  = 8192
 	sessionWriteBufferSize = 8192
+
+	zkTimeout = 3 * time.Second
+
+	maxConnChanSize = 100000
 )
 
 type atomicObject struct {
@@ -41,46 +46,62 @@ type atomicObject struct {
 
 // TimestampOracle generates a unique timestamp.
 type TimestampOracle struct {
-	ts     atomic.Value
-	ticker *time.Ticker
+	cfg *Config
+
+	ts atomic.Value
 
 	listener net.Listener
 
 	wg       sync.WaitGroup
 	connLock sync.Mutex
 	conns    map[net.Conn]struct{}
+
+	zkElector *zkhelper.ZElector
+	zkConn    zkhelper.Conn
+
+	isLeader int64
 }
 
-func (tso *TimestampOracle) updateTicker() {
-	// TODO: save latest TS to persistent storage(zookeeper/etcd...)
-	for {
-		select {
-		case <-tso.ticker.C:
-			prev := tso.ts.Load().(*atomicObject)
-			now := time.Now()
-
-			// ms
-			since := now.Sub(prev.physical).Nanoseconds() / 1e6
-			if since > 2*updateTimtestampStep {
-				log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
-			}
-			// Avoid the same physical time stamp
-			if since <= 0 {
-				log.Warn("invalid physical time stamp")
-				continue
-			}
-
-			current := &atomicObject{
-				physical: now,
-			}
-			tso.ts.Store(current)
-		}
+func (tso *TimestampOracle) loadTimestamp() error {
+	// TODO: load timestamp from zookeeper
+	current := &atomicObject{
+		physical: time.Now(),
 	}
+	tso.ts.Store(current)
+
+	return nil
 }
+
+func (tso *TimestampOracle) updateTimestamp() error {
+	prev := tso.ts.Load().(*atomicObject)
+	now := time.Now()
+
+	// ms
+	since := now.Sub(prev.physical).Nanoseconds() / 1e6
+	if since > 2*updateTimtestampStep {
+		log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
+	}
+	// Avoid the same physical time stamp
+	if since <= 0 {
+		log.Warn("invalid physical time stamp")
+		return nil
+	}
+
+	// TODO: save timestamp in zookeeper if possible.
+
+	current := &atomicObject{
+		physical: now,
+	}
+	tso.ts.Store(current)
+
+	return nil
+}
+
+const maxRetryNum = 100
 
 func (tso *TimestampOracle) getRespTS() *proto.Response {
 	resp := &proto.Response{}
-	for {
+	for i := 0; i < maxRetryNum; i++ {
 		current := tso.ts.Load().(*atomicObject)
 		resp.Physical = int64(current.physical.UnixNano()) / 1e6
 		resp.Logical = atomic.AddInt64(&current.logical, 1)
@@ -89,18 +110,15 @@ func (tso *TimestampOracle) getRespTS() *proto.Response {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		break
+		return resp
 	}
-	return resp
+	return nil
 }
 
 func (tso *TimestampOracle) handleConnection(s *session) {
 	defer func() {
-		tso.connLock.Lock()
-		delete(tso.conns, s.conn)
-		tso.connLock.Unlock()
+		tso.closeConn(s.conn)
 
-		s.conn.Close()
 		tso.wg.Done()
 	}()
 
@@ -114,6 +132,10 @@ func (tso *TimestampOracle) handleConnection(s *session) {
 		}
 
 		resp := tso.getRespTS()
+		if resp == nil {
+			log.Errorf("get repsone timestamp timeout, close %v", s.conn.RemoteAddr())
+			return
+		}
 		resp.Encode(s.w)
 		if s.r.Buffered() <= 0 {
 			err = s.w.Flush()
@@ -131,60 +153,238 @@ type session struct {
 	conn net.Conn
 }
 
-// NewTimestampOracle creates a tso server with listen address addr.
-func NewTimestampOracle(addr string) (*TimestampOracle, error) {
+// NewTimestampOracle creates a tso server with special config.
+func NewTimestampOracle(cfg *Config) (*TimestampOracle, error) {
 	tso := &TimestampOracle{
-		ticker: time.NewTicker(time.Duration(updateTimtestampStep) * time.Millisecond),
+		cfg:      cfg,
+		isLeader: 0,
 	}
-	current := &atomicObject{
-		physical: time.Now(),
-	}
-	tso.ts.Store(current)
-	go tso.updateTicker()
 
-	ln, err := net.Listen("tcp", addr)
+	var err error
+	tso.listener, err = net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	tso.listener = ln
+	if len(cfg.ZKAddr) == 0 {
+		// no zookeeper, use a fake zk conn instead
+		tso.zkConn = zkhelper.NewConn()
+	} else {
+		tso.zkConn, err = zkhelper.ConnectToZkWithTimeout(cfg.ZKAddr, zkTimeout)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
 	tso.conns = map[net.Conn]struct{}{}
 
 	return tso, nil
 }
 
-// Run runs the timestamp oracle server.
-func (tso *TimestampOracle) Run() {
+type tsoTask struct {
+	tso *TimestampOracle
+
+	connCh chan net.Conn
+
+	interruptCh chan error
+	interrupted int64
+
+	stopCh chan struct{}
+}
+
+func (t *tsoTask) Run() error {
+	if t.Interrupted() {
+		return errors.New("task has been interrupted already")
+	}
+
+	// enter here means I am the leader tso.
+	tso := t.tso
+
+	log.Debugf("tso leader %s run task", tso)
+
+	if err := tso.loadTimestamp(); err != nil {
+		return errors.Trace(err)
+	}
+
+	atomic.StoreInt64(&tso.isLeader, 1)
+
+	tsTicker := time.NewTicker(time.Duration(updateTimtestampStep) * time.Millisecond)
+
+	defer func() {
+		atomic.StoreInt64(&tso.isLeader, 0)
+
+		tsTicker.Stop()
+
+		// we should close all connections.
+		t.closeAllConns()
+		log.Debugf("tso leader %s task end", tso)
+	}()
+
+	for {
+		var conn net.Conn
+
+		select {
+		case err := <-t.interruptCh:
+			log.Debugf("tso leader %s is interrupted, err %v", tso, err)
+
+			// we will interrupt this task, and we can't run this task again.
+			atomic.StoreInt64(&t.interrupted, 1)
+			return errors.Trace(err)
+		case <-t.stopCh:
+			log.Debugf("tso leader %s is stopped", tso)
+
+			// we will stop this task, maybe run again later.
+			return errors.New("task is stopped")
+		case conn = <-t.connCh:
+			// handle connection below
+
+			s := &session{
+				r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
+				w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
+				conn: conn,
+			}
+
+			tso.addConn(conn)
+			tso.wg.Add(1)
+			go tso.handleConnection(s)
+		case <-tsTicker.C:
+			if err := tso.updateTimestamp(); err != nil {
+				return errors.Trace(err)
+			}
+		}
+	}
+}
+
+func (t *tsoTask) Interrupted() bool {
+	return atomic.LoadInt64(&t.interrupted) == 1
+}
+
+func (t *tsoTask) Stop() {
+	select {
+	case t.stopCh <- struct{}{}:
+	default:
+		log.Warnf("task stop blocked")
+	}
+}
+
+func (t *tsoTask) closeAllConns() {
+	t.tso.closeAllConns()
+
+	// we may close the connection in connCh too
+	for {
+		select {
+		case conn := <-t.connCh:
+			conn.Close()
+		default:
+			return
+		}
+	}
+}
+
+func (t *tsoTask) Listening() {
+	tso := t.tso
+
+	defer tso.wg.Done()
+
 	for {
 		conn, err := tso.listener.Accept()
 		if err != nil {
+			t.interruptCh <- errors.Trace(err)
 			return
 		}
 
-		s := &session{
-			r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
-			w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
-			conn: conn,
+		if !tso.IsLeader() {
+			// here mean I am not the leader now, so close all accpeted connections.
+			conn.Close()
+			continue
 		}
 
-		tso.conns[conn] = struct{}{}
-		tso.wg.Add(1)
-		go tso.handleConnection(s)
+		t.connCh <- conn
 	}
+}
+
+// String implements fmt.Stringer interface.
+func (tso *TimestampOracle) String() string {
+	return tso.cfg.Addr
+}
+
+// Run runs the timestamp oracle server.
+func (tso *TimestampOracle) Run() error {
+	log.Debugf("tso %s begin to run", tso)
+
+	m := map[string]interface{}{
+		"Addr": tso.cfg.Addr,
+	}
+	ze, err := zkhelper.CreateElectionWithContents(tso.zkConn, tso.cfg.RootPath, m)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	tso.zkElector = &ze
+
+	task := &tsoTask{
+		tso:         tso,
+		connCh:      make(chan net.Conn, maxConnChanSize),
+		interruptCh: make(chan error, 1),
+		stopCh:      make(chan struct{}, 1),
+		interrupted: 0,
+	}
+
+	tso.wg.Add(1)
+	go task.Listening()
+
+	err = tso.zkElector.RunTask(task)
+	return errors.Trace(err)
 }
 
 // Close closes timestamp oracle server.
 func (tso *TimestampOracle) Close() {
-	tso.listener.Close()
+	log.Debugf("tso server %s closing", tso)
 
-	tso.connLock.Lock()
-	for conn, _ := range tso.conns {
-		conn.Close()
-		delete(tso.conns, conn)
+	if tso.listener != nil {
+		tso.listener.Close()
 	}
-	tso.connLock.Unlock()
+
+	tso.closeAllConns()
+
+	if tso.zkConn != nil {
+		tso.zkConn.Close()
+	}
 
 	tso.wg.Wait()
 
 	return
+}
+
+// ListenAddr returns listen address.
+// You must call it after tso server accepts succesfully.
+func (tso *TimestampOracle) ListenAddr() string {
+	return tso.listener.Addr().String()
+}
+
+// IsLeader returns whether tso is leader or not.
+func (tso *TimestampOracle) IsLeader() bool {
+	return atomic.LoadInt64(&tso.isLeader) == 1
+}
+
+func (tso *TimestampOracle) closeAllConns() {
+	tso.connLock.Lock()
+	for conn := range tso.conns {
+		conn.Close()
+		delete(tso.conns, conn)
+	}
+	tso.connLock.Unlock()
+}
+
+func (tso *TimestampOracle) addConn(conn net.Conn) {
+	tso.connLock.Lock()
+	tso.conns[conn] = struct{}{}
+	tso.connLock.Unlock()
+}
+
+func (tso *TimestampOracle) closeConn(conn net.Conn) {
+	tso.connLock.Lock()
+	delete(tso.conns, conn)
+	tso.connLock.Unlock()
+
+	conn.Close()
 }

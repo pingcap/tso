@@ -21,10 +21,11 @@ import (
 	"time"
 
 	"github.com/ngaut/tso/proto"
+	"github.com/ngaut/zkhelper"
 	. "github.com/pingcap/check"
 )
 
-var testAddr = flag.String("addr", ":1234", "test tso server address")
+var testZKAddr = flag.String("zk", "127.0.0.1:2181", "test zookeeper address")
 
 func TestServer(t *testing.T) {
 	TestingT(t)
@@ -33,21 +34,47 @@ func TestServer(t *testing.T) {
 var _ = Suite(&testServerSuite{})
 
 type testServerSuite struct {
-	tso *TimestampOracle
+	tso    *TimestampOracle
+	zkConn zkhelper.Conn
 }
 
-func (s *testServerSuite) SetUpSuite(c *C) {
-	tso, err := NewTimestampOracle(*testAddr)
+func testStartServer(c *C, cfg *Config) *TimestampOracle {
+	tso, err := NewTimestampOracle(cfg)
 	c.Assert(err, IsNil)
 
-	s.tso = tso
+	// reset address, because we use 127.0.0.1:0 for listening.
+	tso.cfg.Addr = tso.ListenAddr()
 
 	go tso.Run()
 	time.Sleep(100 * time.Millisecond)
+	return tso
+}
+
+func (s *testServerSuite) SetUpSuite(c *C) {
+	conn, err := zkhelper.ConnectToZkWithTimeout(*testZKAddr, time.Second)
+	c.Assert(err, IsNil)
+	s.zkConn = conn
+
+	cfg := &Config{
+		Addr:     "127.0.0.1:0",
+		ZKAddr:   *testZKAddr,
+		RootPath: "/zk/tso_test",
+	}
+
+	s.tso = testStartServer(c, cfg)
 }
 
 func (s *testServerSuite) TearDownSuite(c *C) {
-	s.tso.Close()
+	if s.tso != nil {
+		s.tso.Close()
+	}
+
+	if s.zkConn != nil {
+		err := zkhelper.DeleteRecursive(s.zkConn, "/zk/tso_test", -1)
+		c.Assert(err, IsNil)
+
+		s.zkConn.Close()
+	}
 }
 
 func (s *testServerSuite) testGetTimestamp(c *C, conn net.Conn, n int) []proto.Response {
@@ -76,7 +103,7 @@ func (s *testServerSuite) TestServer(c *C) {
 		go func() {
 			defer wg.Done()
 
-			conn, err := net.Dial("tcp", *testAddr)
+			conn, err := net.Dial("tcp", s.tso.ListenAddr())
 			c.Assert(err, IsNil)
 			defer conn.Close()
 
@@ -85,4 +112,22 @@ func (s *testServerSuite) TestServer(c *C) {
 	}
 
 	wg.Wait()
+}
+
+func (s *testServerSuite) TestFakeZK(c *C) {
+	cfg := &Config{
+		// use 127.0.0.1:0 to listen a unique port.
+		Addr:     "127.0.0.1:0",
+		RootPath: "/zk/tso_test",
+	}
+	tso := testStartServer(c, cfg)
+	defer tso.Close()
+
+	addr := tso.ListenAddr()
+
+	conn, err := net.Dial("tcp", addr)
+	c.Assert(err, IsNil)
+	defer conn.Close()
+
+	s.testGetTimestamp(c, conn, 10)
 }

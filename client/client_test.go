@@ -14,7 +14,6 @@
 package client
 
 import (
-	"flag"
 	"sync"
 	"testing"
 	"time"
@@ -23,8 +22,6 @@ import (
 	"github.com/ngaut/tso/tso-server/server"
 	. "github.com/pingcap/check"
 )
-
-var testAddr = flag.String("addr", ":1234", "test tso server address")
 
 func TestClient(t *testing.T) {
 	TestingT(t)
@@ -39,24 +36,32 @@ type testClientSuite struct {
 
 func (s *testClientSuite) SetUpSuite(c *C) {
 	s.testStartServer(c)
-
-	s.client = NewClient(&Conf{
-		ServerAddr: *testAddr,
-	})
 }
 
 func (s *testClientSuite) TearDownSuite(c *C) {
-	s.server.Close()
+	if s.server != nil {
+		s.server.Close()
+	}
 }
 
 func (s *testClientSuite) testStartServer(c *C) {
-	svr, err := server.NewTimestampOracle(*testAddr)
+	cfg := &server.Config{
+		Addr: "127.0.0.1:0",
+		// use a fake zookeeper
+		ZKAddr:   "",
+		RootPath: "/zk/test_tso",
+	}
+	svr, err := server.NewTimestampOracle(cfg)
 	c.Assert(err, IsNil)
 
 	go svr.Run()
 	time.Sleep(100 * time.Millisecond)
 
 	s.server = svr
+
+	s.client = NewClient(&Conf{
+		ServerAddr: svr.ListenAddr(),
+	})
 }
 
 func (s *testClientSuite) testGetTimestamp(c *C, n int) []*proto.Timestamp {

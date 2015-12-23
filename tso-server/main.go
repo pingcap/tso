@@ -13,13 +13,24 @@ import (
 )
 
 var (
-	addr = flag.String("addr", ":1234", "server listening address")
+	addr     = flag.String("addr", "127.0.0.1:1234", "server listening address")
+	zk       = flag.String("zk", "127.0.0.1:2181", "zookeeper address")
+	rootPath = flag.String("root", "/zk/tso", "tso root path in zookeeper, must have the prefix /zk first")
+	logLevel = flag.String("L", "debug", "log level: info, debug, warn, error, fatal")
 )
 
 func main() {
 	flag.Parse()
 
-	oracle, err := server.NewTimestampOracle(*addr)
+	log.SetLevelByString(*logLevel)
+
+	cfg := &server.Config{
+		Addr:     *addr,
+		ZKAddr:   *zk,
+		RootPath: *rootPath,
+	}
+
+	oracle, err := server.NewTimestampOracle(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
