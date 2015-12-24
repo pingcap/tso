@@ -14,10 +14,8 @@
 package server
 
 import (
-	"encoding/json"
 	"math/rand"
 	"net"
-	"path"
 	"sync"
 	"time"
 
@@ -78,7 +76,6 @@ func (s *testMultiServerSuite) testGetTimestamp(c *C, duration time.Duration) {
 		addr  string
 		watch <-chan zk.Event
 		err   error
-		data  []byte
 
 		conn net.Conn
 
@@ -93,14 +90,8 @@ func (s *testMultiServerSuite) testGetTimestamp(c *C, duration time.Duration) {
 		}
 
 		if len(addr) == 0 {
-			data, _, watch, err = s.zkConn.GetW(path.Join(s.rootPath, "leader"))
-			c.Assert(err, IsNil, Commentf("path %s", path.Join(s.rootPath, "leader")))
-
-			var m map[string]interface{}
-			err = json.Unmarshal(data, &m)
+			addr, watch, err = GetWatchLeader(s.zkConn, s.rootPath)
 			c.Assert(err, IsNil)
-
-			addr = m["Addr"].(string)
 
 			conn, err = net.Dial("tcp", addr)
 			c.Assert(err, IsNil)
@@ -163,7 +154,7 @@ func (s *testMultiServerSuite) TestMulti(c *C) {
 					if tso.IsLeader() {
 						log.Warnf("handle leader %s", tso.ListenAddr())
 						if rand.Int()%2 == 0 {
-							// stop tso server
+							// stop tso server task to let other server become the leader.
 							tso.zkElector.Interrupt()
 						} else {
 							// restart tso server
