@@ -14,6 +14,7 @@
 package client
 
 import (
+	"flag"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,8 @@ import (
 	. "github.com/pingcap/check"
 )
 
+var testZK = flag.String("zk", "127.0.0.1:2181", "test zookeeper address")
+
 func TestClient(t *testing.T) {
 	TestingT(t)
 }
@@ -30,12 +33,18 @@ func TestClient(t *testing.T) {
 var _ = Suite(&testClientSuite{})
 
 type testClientSuite struct {
-	server *server.TimestampOracle
-	client *Client
+	server   *server.TimestampOracle
+	client   *Client
+	rootPath string
 }
 
 func (s *testClientSuite) SetUpSuite(c *C) {
 	s.testStartServer(c)
+
+	s.client = NewClient(&Conf{
+		ZKAddr:   *testZK,
+		RootPath: s.rootPath,
+	})
 }
 
 func (s *testClientSuite) TearDownSuite(c *C) {
@@ -45,24 +54,23 @@ func (s *testClientSuite) TearDownSuite(c *C) {
 }
 
 func (s *testClientSuite) testStartServer(c *C) {
+	s.rootPath = "/zk/test_tso"
+
 	cfg := &server.Config{
-		Addr: "127.0.0.1:0",
-		// use a fake zookeeper
-		ZKAddr:       "",
-		RootPath:     "/zk/test_tso",
+		Addr:         "127.0.0.1:0",
+		ZKAddr:       *testZK,
+		RootPath:     s.rootPath,
 		SaveInterval: 100,
 	}
 	svr, err := server.NewTimestampOracle(cfg)
 	c.Assert(err, IsNil)
 
+	cfg.Addr = svr.ListenAddr()
+
 	go svr.Run()
 	time.Sleep(100 * time.Millisecond)
 
 	s.server = svr
-
-	s.client = NewClient(&Conf{
-		ServerAddr: svr.ListenAddr(),
-	})
 }
 
 func (s *testClientSuite) testGetTimestamp(c *C, n int) []*proto.Timestamp {
@@ -74,8 +82,8 @@ func (s *testClientSuite) testGetTimestamp(c *C, n int) []*proto.Timestamp {
 		c.Assert(err, IsNil)
 
 		res[i] = ts
-		c.Assert(res[i].Physical, GreaterEqual, last.Physical)
-		c.Assert(res[i].Logical, Greater, last.Logical)
+		c.Assert(ts.Physical, GreaterEqual, last.Physical)
+		c.Assert(ts.Logical, Greater, last.Logical)
 		last = ts
 	}
 
@@ -99,12 +107,19 @@ func (s *testClientSuite) TestClient(c *C) {
 func (s *testClientSuite) TestRestart(c *C) {
 	s.server.Close()
 
-	r := s.client.GoGetTimestamp()
-	_, err := r.GetTS()
-	c.Assert(err, NotNil)
+	n := 3
+	for i := 0; i < n; i++ {
+		r := s.client.GoGetTimestamp()
+		_, err := r.GetTS()
+		c.Assert(err, NotNil)
+	}
 
 	s.testStartServer(c)
-	r = s.client.GoGetTimestamp()
-	_, err = r.GetTS()
-	c.Assert(err, IsNil)
+	time.Sleep(2 * time.Second)
+
+	for i := 0; i < n; i++ {
+		r := s.client.GoGetTimestamp()
+		_, err := r.GetTS()
+		c.Assert(err, IsNil)
+	}
 }

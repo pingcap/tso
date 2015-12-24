@@ -7,6 +7,8 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
+	"github.com/ngaut/tso/util"
+	"github.com/ngaut/zkhelper"
 )
 
 const (
@@ -19,11 +21,24 @@ type Client struct {
 
 	pending *list.List
 	conf    *Conf
+
+	addr string
+
+	leaderCh chan string
 }
 
 // Conf is the configuration.
 type Conf struct {
+	// tso server address, it will be deprecated later.
 	ServerAddr string
+
+	// ZKAddr is for zookeeper address, if set, client will ignore ServerAddr
+	// and find the leader tso server address in zookeeper.
+	// Later ServerAddr is just for simple test and backward compatibility.
+	ZKAddr string
+
+	// root path is the tso server saving in zookeeper, like /zk/tso.
+	RootPath string
 }
 
 // PipelineRequest let you get the timestamp with pipeline.
@@ -63,6 +78,13 @@ func NewClient(conf *Conf) *Client {
 		requests: make(chan *PipelineRequest, maxPipelineRequest),
 		pending:  list.New(),
 		conf:     conf,
+		leaderCh: make(chan string, 1),
+	}
+
+	if len(conf.ZKAddr) == 0 {
+		c.leaderCh <- conf.ServerAddr
+	} else {
+		go c.watchLeader()
 	}
 
 	go c.workerLoop()
@@ -77,6 +99,12 @@ func (c *Client) cleanupPending(err error) {
 		e := c.pending.Front()
 		c.pending.Remove(e)
 		e.Value.(*PipelineRequest).MarkDone(nil, err)
+	}
+
+	// clear request in channel too
+	for i := 0; i < len(c.requests); i++ {
+		req := <-c.requests
+		req.MarkDone(nil, err)
 	}
 }
 
@@ -110,10 +138,13 @@ func (c *Client) handleResponse(session *Conn) error {
 }
 
 func (c *Client) do() error {
-	session, err := NewConnection(c.conf.ServerAddr, time.Duration(1*time.Second))
+	session, err := NewConnection(c.addr, time.Duration(1*time.Second))
 	if err != nil {
 		return errors.Trace(err)
 	}
+
+	log.Debugf("connect tso server %s ok", c.addr)
+
 	defer session.Close()
 	for {
 		select {
@@ -124,6 +155,7 @@ func (c *Client) do() error {
 				req = <-c.requests
 				c.pending.PushBack(req)
 			}
+
 			err = c.writeRequests(session)
 			if err != nil {
 				return errors.Trace(err)
@@ -132,17 +164,70 @@ func (c *Client) do() error {
 			if err != nil {
 				return errors.Trace(err)
 			}
+		case addr := <-c.leaderCh:
+			c.addr = addr
+			return errors.Errorf("leader change %s -> %s", c.addr, addr)
 		}
 	}
 }
 
 func (c *Client) workerLoop() {
+	// first get tso leader
+	c.addr = <-c.leaderCh
+	log.Debugf("try to connect tso server %s", c.addr)
+
 	for {
 		err := c.do()
 		if err != nil {
 			c.cleanupPending(err)
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(1 * time.Second):
+		case addr := <-c.leaderCh:
+			log.Warnf("leader change %s -> %s", c.addr, addr)
+			c.addr = addr
+			// wati sometime to let tso server allow accepting connections
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func (c *Client) watchLeader() {
+	var (
+		conn zkhelper.Conn
+		err  error
+	)
+
+	for {
+		conn, err = zkhelper.ConnectToZkWithTimeout(c.conf.ZKAddr, time.Second)
+		if err != nil {
+			log.Errorf("connect zk err %v, retry later", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		break
+	}
+
+	defer conn.Close()
+
+	var lastAddr string
+
+	for {
+		addr, watcher, err := util.GetWatchLeader(conn, c.conf.RootPath)
+		if err != nil {
+			log.Errorf("get tso leader err %v, retry later", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		if lastAddr != addr {
+			log.Warnf("leader change %s -> %s", lastAddr, addr)
+			lastAddr = addr
+			c.leaderCh <- addr
+		}
+
+		// watch the leader changes.
+		<-watcher
 	}
 }
 
