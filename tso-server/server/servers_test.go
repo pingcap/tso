@@ -22,6 +22,7 @@ import (
 	"github.com/ngaut/go-zookeeper/zk"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
+	"github.com/ngaut/tso/util"
 	"github.com/ngaut/zkhelper"
 	. "github.com/pingcap/check"
 )
@@ -91,7 +92,7 @@ func (s *testMultiServerSuite) testGetTimestamp(c *C, duration time.Duration) {
 		}
 
 		if len(addr) == 0 {
-			addr, watch, err = GetWatchLeader(s.zkConn, s.rootPath)
+			addr, watch, err = util.GetWatchLeader(s.zkConn, s.rootPath)
 			c.Assert(err, IsNil)
 
 			conn, err = net.Dial("tcp", addr)
