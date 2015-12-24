@@ -48,8 +48,9 @@ func (s *testClientSuite) testStartServer(c *C) {
 	cfg := &server.Config{
 		Addr: "127.0.0.1:0",
 		// use a fake zookeeper
-		ZKAddr:   "",
-		RootPath: "/zk/test_tso",
+		ZKAddr:       "",
+		RootPath:     "/zk/test_tso",
+		SaveInterval: 100,
 	}
 	svr, err := server.NewTimestampOracle(cfg)
 	c.Assert(err, IsNil)

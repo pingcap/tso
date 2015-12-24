@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/ngaut/go-zookeeper/zk"
 	"github.com/ngaut/log"
 	"github.com/ngaut/tso/proto"
 	"github.com/ngaut/zkhelper"
@@ -37,6 +38,8 @@ const (
 	zkTimeout = 3 * time.Second
 
 	maxConnChanSize = 100000
+
+	defaultSaveInterval = 2000
 )
 
 type atomicObject struct {
@@ -60,15 +63,59 @@ type TimestampOracle struct {
 	zkConn    zkhelper.Conn
 
 	isLeader int64
+
+	lastSavedTime time.Time
 }
 
 func (tso *TimestampOracle) loadTimestamp() error {
-	// TODO: load timestamp from zookeeper
+	last, err := loadTimestamp(tso.zkConn, tso.cfg.RootPath)
+	if err == zk.ErrNoNode {
+		// no timestamp node, create later
+		err = nil
+	}
+
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	var now time.Time
+
+	for {
+		now = time.Now()
+
+		since := (now.UnixNano() - last) / 1e6
+		if since < 0 {
+			return errors.Errorf("%s fall behind last saved time %s", now, time.Unix(0, last))
+		}
+
+		if wait := 2*tso.cfg.SaveInterval - since; wait > 0 {
+			log.Warnf("wait %d milliseconds to guarantee valid generated timestamp", wait)
+			time.Sleep(time.Duration(wait) * time.Millisecond)
+			continue
+		}
+
+		break
+	}
+
+	if err = tso.saveTimestamp(now); err != nil {
+		return errors.Trace(err)
+	}
+
 	current := &atomicObject{
-		physical: time.Now(),
+		physical: now,
 	}
 	tso.ts.Store(current)
 
+	return nil
+}
+
+func (tso *TimestampOracle) saveTimestamp(now time.Time) error {
+	log.Debugf("save timestamp %s", now)
+	err := saveTimestamp(tso.zkConn, tso.cfg.RootPath, now.UnixNano())
+	if err != nil {
+		return errors.Trace(err)
+	}
+	tso.lastSavedTime = now
 	return nil
 }
 
@@ -83,11 +130,15 @@ func (tso *TimestampOracle) updateTimestamp() error {
 	}
 	// Avoid the same physical time stamp
 	if since <= 0 {
-		log.Warn("invalid physical time stamp")
+		log.Warn("invalid physical time stamp, re-update later again")
 		return nil
 	}
 
-	// TODO: save timestamp in zookeeper if possible.
+	if now.Sub(tso.lastSavedTime).Nanoseconds()/1e6 > tso.cfg.SaveInterval {
+		if err := tso.saveTimestamp(now); err != nil {
+			return errors.Trace(err)
+		}
+	}
 
 	current := &atomicObject{
 		physical: now,
@@ -155,6 +206,10 @@ type session struct {
 
 // NewTimestampOracle creates a tso server with special config.
 func NewTimestampOracle(cfg *Config) (*TimestampOracle, error) {
+	if cfg.SaveInterval <= 0 {
+		cfg.SaveInterval = defaultSaveInterval
+	}
+
 	tso := &TimestampOracle{
 		cfg:      cfg,
 		isLeader: 0,
@@ -203,6 +258,7 @@ func (t *tsoTask) Run() error {
 	log.Debugf("tso leader %s run task", tso)
 
 	if err := tso.loadTimestamp(); err != nil {
+		// should we interrupt the task here now?
 		return errors.Trace(err)
 	}
 

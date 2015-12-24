@@ -14,6 +14,7 @@
 package server
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"path"
 
@@ -78,4 +79,35 @@ func GetWatchLeader(conn zkhelper.Conn, rootPath string) (string, <-chan zk.Even
 	// }
 
 	return addr, watcher, nil
+}
+
+func getTimestampPath(rootPath string) string {
+	return path.Join(rootPath, "timestamp")
+}
+
+func loadTimestamp(conn zkhelper.Conn, rootPath string) (int64, error) {
+	data, _, err := conn.Get(getTimestampPath(rootPath))
+	if zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
+		return 0, zk.ErrNoNode
+	} else if err != nil {
+		return 0, errors.Trace(err)
+	} else if len(data) != 8 {
+		return 0, errors.Errorf("invalid timestamp data, must 8 bytes, but %d", len(data))
+	}
+
+	return int64(binary.BigEndian.Uint64(data)), nil
+}
+
+func saveTimestamp(conn zkhelper.Conn, rootPath string, ts int64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[0:8], uint64(ts))
+
+	tsPath := getTimestampPath(rootPath)
+
+	_, err := conn.Set(tsPath, buf[0:8], -1)
+	if zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
+		_, err = conn.Create(tsPath, buf[0:8], 0, zk.WorldACL(zkhelper.PERM_FILE))
+	}
+
+	return errors.Trace(err)
 }

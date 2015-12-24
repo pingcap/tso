@@ -90,3 +90,32 @@ func (s *testUtilSuite) TestLeader(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(v, Equals, addr)
 }
+
+func (s *testUtilSuite) TestTimestamp(c *C) {
+	conn, err := zkhelper.ConnectToZkWithTimeout(*testZKAddr, time.Second)
+	c.Assert(err, IsNil)
+	defer conn.Close()
+
+	tbl := []int64{
+		1, 100, 1000,
+	}
+
+	for _, t := range tbl {
+		err = saveTimestamp(conn, s.rootPath, t)
+		c.Assert(err, IsNil)
+
+		n, err := loadTimestamp(conn, s.rootPath)
+		c.Assert(err, IsNil)
+		c.Assert(n, Equals, t)
+	}
+
+	// test error
+	_, err = loadTimestamp(conn, "error_root_path")
+	c.Assert(err, NotNil)
+
+	_, err = conn.Set(getTimestampPath(s.rootPath), []byte{}, -1)
+	c.Assert(err, IsNil)
+
+	_, err = loadTimestamp(conn, s.rootPath)
+	c.Assert(err, NotNil)
+}

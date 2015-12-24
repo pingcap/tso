@@ -25,4 +25,9 @@ type Config struct {
 
 	// root path for saving data in zookeeper, the path must has the magic preifx /zk first,
 	RootPath string
+
+	// SaveInterval is the interval time (ms) to save timestamp in zookeeper.
+	// When the leader begins to run, it first loads the saved timestamp from zookeeper, e.g, T1,
+	// and the leader must guarantee that the next timestamp must be > T1 + 2 * SaveInterval.
+	SaveInterval int64
 }

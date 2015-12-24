@@ -16,6 +16,7 @@ var (
 	addr     = flag.String("addr", "127.0.0.1:1234", "server listening address")
 	zk       = flag.String("zk", "127.0.0.1:2181", "zookeeper address")
 	rootPath = flag.String("root", "/zk/tso", "tso root path in zookeeper, must have the prefix /zk first")
+	interval = flag.Int64("interval", 2000, "interval milliseconds to save timestamp in zookeeper, default is 2000(ms)")
 	logLevel = flag.String("L", "debug", "log level: info, debug, warn, error, fatal")
 )
 
@@ -25,9 +26,10 @@ func main() {
 	log.SetLevelByString(*logLevel)
 
 	cfg := &server.Config{
-		Addr:     *addr,
-		ZKAddr:   *zk,
-		RootPath: *rootPath,
+		Addr:         *addr,
+		ZKAddr:       *zk,
+		RootPath:     *rootPath,
+		SaveInterval: *interval,
 	}
 
 	oracle, err := server.NewTimestampOracle(cfg)

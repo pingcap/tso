@@ -56,9 +56,10 @@ func (s *testServerSuite) SetUpSuite(c *C) {
 	s.zkConn = conn
 
 	cfg := &Config{
-		Addr:     "127.0.0.1:0",
-		ZKAddr:   *testZKAddr,
-		RootPath: "/zk/tso_test",
+		Addr:         "127.0.0.1:0",
+		ZKAddr:       *testZKAddr,
+		RootPath:     "/zk/tso_test",
+		SaveInterval: 100,
 	}
 
 	s.tso = testStartServer(c, cfg)
@@ -117,8 +118,9 @@ func (s *testServerSuite) TestServer(c *C) {
 func (s *testServerSuite) TestFakeZK(c *C) {
 	cfg := &Config{
 		// use 127.0.0.1:0 to listen a unique port.
-		Addr:     "127.0.0.1:0",
-		RootPath: "/zk/tso_test",
+		Addr:         "127.0.0.1:0",
+		RootPath:     "/zk/tso_test",
+		SaveInterval: 100,
 	}
 	tso := testStartServer(c, cfg)
 	defer tso.Close()

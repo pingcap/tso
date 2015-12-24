@@ -48,9 +48,10 @@ func (s *testMultiServerSuite) SetUpSuite(c *C) {
 	for i := 0; i < n; i++ {
 		cfg := &Config{
 			// use 127.0.0.1:0 to listen a unique port.
-			Addr:     "127.0.0.1:0",
-			ZKAddr:   *testZKAddr,
-			RootPath: s.rootPath,
+			Addr:         "127.0.0.1:0",
+			ZKAddr:       *testZKAddr,
+			RootPath:     s.rootPath,
+			SaveInterval: 100,
 		}
 		tso := testStartServer(c, cfg)
 		s.servers = append(s.servers, tso)
@@ -162,9 +163,10 @@ func (s *testMultiServerSuite) TestMulti(c *C) {
 
 							cfg := &Config{
 								// use 127.0.0.1:0 to listen a unique port.
-								Addr:     "127.0.0.1:0",
-								ZKAddr:   *testZKAddr,
-								RootPath: s.rootPath,
+								Addr:         "127.0.0.1:0",
+								ZKAddr:       *testZKAddr,
+								RootPath:     s.rootPath,
+								SaveInterval: 100,
 							}
 							s.servers[i] = testStartServer(c, cfg)
 						}
