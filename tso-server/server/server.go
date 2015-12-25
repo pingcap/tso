@@ -327,13 +327,10 @@ func (t *tsoTask) closeAllConns() {
 	t.tso.closeAllConns()
 
 	// we may close the connection in connCh too
-	for {
-		select {
-		case conn := <-t.connCh:
-			conn.Close()
-		default:
-			return
-		}
+	n := len(t.connCh)
+	for i := 0; i < n; i++ {
+		conn := <-t.connCh
+		conn.Close()
 	}
 }
 

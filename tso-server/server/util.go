@@ -41,13 +41,13 @@ func loadTimestamp(conn zkhelper.Conn, rootPath string) (int64, error) {
 
 func saveTimestamp(conn zkhelper.Conn, rootPath string, ts int64) error {
 	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[0:8], uint64(ts))
+	binary.BigEndian.PutUint64(buf[:], uint64(ts))
 
 	tsPath := getTimestampPath(rootPath)
 
-	_, err := conn.Set(tsPath, buf[0:8], -1)
+	_, err := conn.Set(tsPath, buf[:], -1)
 	if zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
-		_, err = conn.Create(tsPath, buf[0:8], 0, zk.WorldACL(zkhelper.PERM_FILE))
+		_, err = conn.Create(tsPath, buf[:], 0, zk.WorldACL(zkhelper.PERM_FILE))
 	}
 
 	return errors.Trace(err)

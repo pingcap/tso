@@ -102,7 +102,8 @@ func (c *Client) cleanupPending(err error) {
 	}
 
 	// clear request in channel too
-	for i := 0; i < len(c.requests); i++ {
+	length = len(c.requests)
+	for i := 0; i < length; i++ {
 		req := <-c.requests
 		req.MarkDone(nil, err)
 	}
@@ -184,9 +185,11 @@ func (c *Client) workerLoop() {
 		select {
 		case <-time.After(1 * time.Second):
 		case addr := <-c.leaderCh:
+			// If old tso server down, NewConnection will fail and return immediately in do function,
+			// so we must check leader change here.
 			log.Warnf("leader change %s -> %s", c.addr, addr)
 			c.addr = addr
-			// wati sometime to let tso server allow accepting connections
+			// Wati sometime to let tso server allow accepting connections.
 			time.Sleep(1 * time.Second)
 		}
 	}
