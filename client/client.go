@@ -189,7 +189,7 @@ func (c *Client) workerLoop() {
 			// so we must check leader change here.
 			log.Warnf("leader change %s -> %s", c.addr, addr)
 			c.addr = addr
-			// Wati sometime to let tso server allow accepting connections.
+			// Wait some time to let tso server allow accepting connections.
 			time.Sleep(1 * time.Second)
 		}
 	}
