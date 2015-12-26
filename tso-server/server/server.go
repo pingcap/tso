@@ -69,7 +69,7 @@ type TimestampOracle struct {
 
 func (tso *TimestampOracle) loadTimestamp() error {
 	last, err := loadTimestamp(tso.zkConn, tso.cfg.RootPath)
-	if err == zk.ErrNoNode {
+	if zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
 		// no timestamp node, create later
 		err = nil
 	}
@@ -84,8 +84,8 @@ func (tso *TimestampOracle) loadTimestamp() error {
 		now = time.Now()
 
 		since := (now.UnixNano() - last) / 1e6
-		if since < 0 {
-			return errors.Errorf("%s fall behind last saved time %s", now, time.Unix(0, last))
+		if since <= 0 {
+			return errors.Errorf("%s <= last saved time %s", now, time.Unix(0, last))
 		}
 
 		if wait := 2*tso.cfg.SaveInterval - since; wait > 0 {
@@ -126,7 +126,7 @@ func (tso *TimestampOracle) updateTimestamp() error {
 	// ms
 	since := now.Sub(prev.physical).Nanoseconds() / 1e6
 	if since > 2*updateTimtestampStep {
-		log.Warnf("clock offset: %v, prev:%v, now %v", since, prev.physical, now)
+		log.Warnf("clock offset: %v, prev: %v, now %v", since, prev.physical, now)
 	}
 	// Avoid the same physical time stamp
 	if since <= 0 {
