@@ -166,8 +166,9 @@ func (c *Client) do() error {
 				return errors.Trace(err)
 			}
 		case addr := <-c.leaderCh:
+			oldAddr := c.addr
 			c.addr = addr
-			return errors.Errorf("leader change %s -> %s", c.addr, addr)
+			return errors.Errorf("leader change %s -> %s", oldAddr, addr)
 		}
 	}
 }
