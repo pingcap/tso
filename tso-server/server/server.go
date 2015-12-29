@@ -292,7 +292,7 @@ func (t *tsoTask) Run() error {
 			return errors.New("task is stopped")
 		case conn := <-t.connCh:
 			// handle connection below
-			t.handleConn(conn)
+			tso.handleConn(conn)
 		case <-tsTicker.C:
 			if err := tso.updateTimestamp(); err != nil {
 				return errors.Trace(err)
@@ -311,20 +311,6 @@ func (t *tsoTask) Stop() {
 	default:
 		log.Warnf("task stop blocked")
 	}
-}
-
-func (t *tsoTask) handleConn(conn net.Conn) {
-	tso := t.tso
-
-	s := &session{
-		r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
-		w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
-		conn: conn,
-	}
-
-	tso.addConn(conn)
-	tso.wg.Add(1)
-	go tso.handleConnection(s)
 }
 
 func (t *tsoTask) closeAllConns() {
@@ -451,4 +437,16 @@ func (tso *TimestampOracle) closeConn(conn net.Conn) {
 	tso.connLock.Unlock()
 
 	conn.Close()
+}
+
+func (tso *TimestampOracle) handleConn(conn net.Conn) {
+	s := &session{
+		r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
+		w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
+		conn: conn,
+	}
+
+	tso.addConn(conn)
+	tso.wg.Add(1)
+	go tso.handleConnection(s)
 }
