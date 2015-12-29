@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	// update timestamp every updateTimtestampStep milliseconds.
-	updateTimtestampStep = int64(10)
-	maxLogical           = int64(1 << 18)
+	// update timestamp every updateTimestampStep milliseconds.
+	updateTimestampStep = int64(10)
+	maxLogical          = int64(1 << 18)
 
 	sessionReadBufferSize  = 8192
 	sessionWriteBufferSize = 8192
@@ -125,7 +125,7 @@ func (tso *TimestampOracle) updateTimestamp() error {
 
 	// ms
 	since := now.Sub(prev.physical).Nanoseconds() / 1e6
-	if since > 2*updateTimtestampStep {
+	if since > 2*updateTimestampStep {
 		log.Warnf("clock offset: %v, prev: %v, now %v", since, prev.physical, now)
 	}
 	// Avoid the same physical time stamp
@@ -239,7 +239,8 @@ func NewTimestampOracle(cfg *Config) (*TimestampOracle, error) {
 type tsoTask struct {
 	tso *TimestampOracle
 
-	connCh chan net.Conn
+	connCh   chan net.Conn
+	connLock sync.Mutex
 
 	interruptCh chan error
 	interrupted int64
@@ -264,7 +265,7 @@ func (t *tsoTask) Run() error {
 
 	atomic.StoreInt64(&tso.isLeader, 1)
 
-	tsTicker := time.NewTicker(time.Duration(updateTimtestampStep) * time.Millisecond)
+	tsTicker := time.NewTicker(time.Duration(updateTimestampStep) * time.Millisecond)
 
 	defer func() {
 		atomic.StoreInt64(&tso.isLeader, 0)
@@ -324,6 +325,9 @@ func (t *tsoTask) Stop() {
 }
 
 func (t *tsoTask) closeAllConns() {
+	t.connLock.Lock()
+	defer t.connLock.Unlock()
+
 	t.tso.closeAllConns()
 
 	// we may close the connection in connCh too
@@ -346,13 +350,17 @@ func (t *tsoTask) Listening() {
 			return
 		}
 
+		t.connLock.Lock()
 		if !tso.IsLeader() {
-			// here mean I am not the leader now, so close all accpeted connections.
+			t.connLock.Unlock()
+
+			// here mean I am not the leader now, so close all accepted connections.
 			conn.Close()
 			continue
 		}
 
 		t.connCh <- conn
+		t.connLock.Unlock()
 	}
 }
 
@@ -409,7 +417,7 @@ func (tso *TimestampOracle) Close() {
 }
 
 // ListenAddr returns listen address.
-// You must call it after tso server accepts succesfully.
+// You must call it after tso server accepts successfully.
 func (tso *TimestampOracle) ListenAddr() string {
 	return tso.listener.Addr().String()
 }
