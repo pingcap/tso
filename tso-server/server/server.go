@@ -278,8 +278,6 @@ func (t *tsoTask) Run() error {
 	}()
 
 	for {
-		var conn net.Conn
-
 		select {
 		case err := <-t.interruptCh:
 			log.Debugf("tso leader %s is interrupted, err %v", tso, err)
@@ -292,18 +290,9 @@ func (t *tsoTask) Run() error {
 
 			// we will stop this task, maybe run again later.
 			return errors.New("task is stopped")
-		case conn = <-t.connCh:
+		case conn := <-t.connCh:
 			// handle connection below
-
-			s := &session{
-				r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
-				w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
-				conn: conn,
-			}
-
-			tso.addConn(conn)
-			tso.wg.Add(1)
-			go tso.handleConnection(s)
+			t.handleConn(conn)
 		case <-tsTicker.C:
 			if err := tso.updateTimestamp(); err != nil {
 				return errors.Trace(err)
@@ -322,6 +311,20 @@ func (t *tsoTask) Stop() {
 	default:
 		log.Warnf("task stop blocked")
 	}
+}
+
+func (t *tsoTask) handleConn(conn net.Conn) {
+	tso := t.tso
+
+	s := &session{
+		r:    bufio.NewReaderSize(conn, sessionReadBufferSize),
+		w:    bufio.NewWriterSize(conn, sessionWriteBufferSize),
+		conn: conn,
+	}
+
+	tso.addConn(conn)
+	tso.wg.Add(1)
+	go tso.handleConnection(s)
 }
 
 func (t *tsoTask) closeAllConns() {
