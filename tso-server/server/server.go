@@ -67,7 +67,7 @@ type TimestampOracle struct {
 	lastSavedTime time.Time
 }
 
-func (tso *TimestampOracle) loadTimestamp() error {
+func (tso *TimestampOracle) syncTimestamp() error {
 	last, err := loadTimestamp(tso.zkConn, tso.cfg.RootPath)
 	if zkhelper.ZkErrorEqual(err, zk.ErrNoNode) {
 		// no timestamp node, create later
@@ -258,8 +258,11 @@ func (t *tsoTask) Run() error {
 
 	log.Debugf("tso leader %s run task", tso)
 
-	if err := tso.loadTimestamp(); err != nil {
-		// should we interrupt the task here now?
+	if err := tso.syncTimestamp(); err != nil {
+		// interrupt here
+		log.Errorf("sync timestmap err %v, interrupt this task", err)
+
+		atomic.StoreInt64(&t.interrupted, 1)
 		return errors.Trace(err)
 	}
 
