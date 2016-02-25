@@ -1,2 +1,2 @@
 # tso
-Transaction Status Oracle
+Timestamp Oracle
